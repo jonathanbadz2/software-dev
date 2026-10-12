@@ -1,7 +1,8 @@
 
 # =========================================================
 # main5.py
-# CUSTOMIZABLE HAND ALPHABET DEMONSTRATION TEMPLATE
+# CUSTOMIZABLE HAND ALPHABET DEMONSTRATION
+# WITH PREDICTION FLUCTUATION
 # =========================================================
 
 import sys
@@ -19,38 +20,62 @@ from PyQt5.QtCore import QTimer, Qt
 
 
 # =========================================================
-# EDIT YOUR LETTER SEQUENCE HERE
+# EDIT ONLY THIS SECTION TO CHANGE YOUR WORDS
 # =========================================================
 
 LETTER_SEQUENCE = [
-    "H", "E", "L", "L", 
-    "NOTHING",
-    "O",
-    "NOTHING",
-    "W", "O", "R", "L", "D"
+    "S", "I", 
+    "L",
+    "L", "I",
+    "M",
+    "A", "N",
+    "NOTHING"
 ]
-
-# Edit only this list to change the demonstration.
-#
-# "A" to "Z"   = Display individual letters
-# "MAHAL KITA" = Display entire phrase
-# "NOTHING"    = No sign detected for 3 seconds
-# "SPACE"      = No sign detected for 3 seconds
-#
-# Initial and final NOTHING states are automatic.
-# You do not need to include them in the sequence.
 
 
 # =========================================================
-# SETTINGS
+# PREDICTION CONFUSION SETTINGS
+# =========================================================
+
+# Letters that initially fluctuate between each other.
+# The dictionary key is the CORRECT letter.
+# The value is the letter it may be confused with.
+
+CONFUSION_PAIRS = {
+    "A": "S",
+    "S": "A",
+    "M": "N",
+    "N": "M",
+    "P": "Q",
+    "Q": "P"
+}
+
+# J initially displays I, then settles on J.
+INITIAL_WRONG_GUESSES = {
+    "J": "I"
+}
+
+
+# =========================================================
+# TIMING SETTINGS
 # =========================================================
 
 CAMERA_INDEX = 0
 
-START_DELAY = 2000           # Initial delay: 2 seconds
-LETTER_DURATION = 3000       # Each letter: 3 seconds
-NOTHING_DURATION = 3000      # NOTHING: 3 seconds
-FLUCTUATION_INTERVAL = 200   # Percentage changes every 0.2 seconds
+START_DELAY = 2000
+
+# Normal letters
+LETTER_DURATION = 3000
+
+# Confusing letters
+FLUCTUATION_DURATION = 2000
+STABLE_DURATION = 3000
+
+# No sign detected
+NOTHING_DURATION = 3000
+
+# Prediction percentage/letter update
+FLUCTUATION_INTERVAL = 80
 
 MIN_PERCENTAGE = 75
 MAX_PERCENTAGE = 99
@@ -113,9 +138,11 @@ class HomePage(QWidget):
         left_layout.addStretch()
 
         image_label = QLabel()
+
         image_label.setPixmap(
             QPixmap("homepagepic.jpg")
         )
+
         image_label.setAlignment(Qt.AlignCenter)
 
         right_layout.addWidget(image_label)
@@ -163,6 +190,7 @@ class HomePage(QWidget):
                 padding: 7px;
                 border-radius: 8px;
             }
+
             QPushButton:hover {
                 background-color: #3d5964;
             }
@@ -176,6 +204,7 @@ class HomePage(QWidget):
                 padding: 7px;
                 border-radius: 8px;
             }
+
             QPushButton:hover {
                 background-color: #c9302c;
             }
@@ -202,7 +231,19 @@ class Camera(QWidget):
         self.confidence = 0
 
         self.demo_index = 0
-        self.current_letter = None
+
+        # Correct target from LETTER_SEQUENCE
+        self.target_letter = None
+
+        # Current entry, including NOTHING or SPACE
+        self.current_entry = None
+
+        # Current display phase
+        self.phase = "initial"
+
+        # Controls alternating prediction guesses
+        self.show_wrong_next = True
+
         self.sequence_finished = False
 
         self.cap = None
@@ -212,17 +253,17 @@ class Camera(QWidget):
         # TIMERS
         # =================================================
 
-        # Controls the delay before the next entry
+        # Moves from one entry or phase to the next
         self.sequence_timer = QTimer(self)
         self.sequence_timer.setSingleShot(True)
         self.sequence_timer.timeout.connect(
-            self.next_letter
+            self.advance_sequence
         )
 
-        # Changes percentage while a letter is displayed
-        self.percentage_timer = QTimer(self)
-        self.percentage_timer.timeout.connect(
-            self.update_percentage
+        # Updates predictions and their percentages
+        self.fluctuation_timer = QTimer(self)
+        self.fluctuation_timer.timeout.connect(
+            self.update_prediction
         )
 
         # =================================================
@@ -332,15 +373,17 @@ class Camera(QWidget):
         if self.cap.isOpened():
 
             self.camera_timer = QTimer(self)
+
             self.camera_timer.timeout.connect(
                 self.update_frame
             )
+
             self.camera_timer.start(30)
 
         else:
             print("Camera could not be opened.")
 
-        # Initial No sign detected lasts 2 seconds.
+        # Initial 2-second No sign detected
         self.show_nothing()
         self.sequence_timer.start(START_DELAY)
 
@@ -350,29 +393,59 @@ class Camera(QWidget):
 
     def show_nothing(self):
 
-        self.current_letter = None
         self.prediction = None
         self.confidence = 0
 
-        self.percentage_timer.stop()
+        self.fluctuation_timer.stop()
 
         self.prediction_label.setText(
             "Prediction: No sign detected"
         )
 
     # =====================================================
-    # NEXT ENTRY IN CUSTOM SEQUENCE
+    # DISPLAY A GIVEN PREDICTION
+    # =====================================================
+
+    def display_letter(self, letter):
+
+        self.prediction = letter
+
+        self.confidence = random.randint(
+            MIN_PERCENTAGE,
+            MAX_PERCENTAGE
+        )
+
+        self.prediction_label.setText(
+            f"Prediction: {letter} "
+            f"({self.confidence}%)"
+        )
+
+    # =====================================================
+    # BEGIN THE NEXT LETTER
     # =====================================================
 
     def next_letter(self):
 
-        # After the final entry, stay on NOTHING.
+        # =================================================
+        # END OF SEQUENCE - NOTHING FOREVER
+        # =================================================
+
         if self.demo_index >= len(LETTER_SEQUENCE):
 
             self.sequence_finished = True
+            self.phase = "finished"
+
+            self.current_entry = None
+            self.target_letter = None
+
             self.sequence_timer.stop()
             self.show_nothing()
+
             return
+
+        # =================================================
+        # READ NEXT ENTRY
+        # =================================================
 
         entry = str(
             LETTER_SEQUENCE[self.demo_index]
@@ -380,30 +453,61 @@ class Camera(QWidget):
 
         self.demo_index += 1
 
+        self.current_entry = entry
+        self.target_letter = entry
+
         # =================================================
-        # NOTHING / SPACE PAUSE: 3 SECONDS
+        # NOTHING / SPACE
         # =================================================
 
         if entry in ("NOTHING", "SPACE"):
 
-            self.current_letter = entry
+            self.phase = "nothing"
             self.show_nothing()
 
             self.sequence_timer.start(
                 NOTHING_DURATION
             )
+
             return
 
         # =================================================
-        # REGULAR LETTER OR PHRASE
+        # LETTERS THAT REQUIRE FLUCTUATION
         # =================================================
 
-        self.current_letter = entry
-        self.prediction = entry
+        if (
+            entry in CONFUSION_PAIRS
+            or entry in INITIAL_WRONG_GUESSES
+        ):
 
-        self.update_percentage()
+            self.phase = "fluctuating"
 
-        self.percentage_timer.start(
+            self.show_wrong_next = True
+
+            # Show the first guess immediately
+            self.update_prediction()
+
+            # Keep updating guesses during first 2 sec
+            self.fluctuation_timer.start(
+                FLUCTUATION_INTERVAL
+            )
+
+            # Finish fluctuation after 2 sec
+            self.sequence_timer.start(
+                FLUCTUATION_DURATION
+            )
+
+            return
+
+        # =================================================
+        # NORMAL LETTERS
+        # =================================================
+
+        self.phase = "normal"
+
+        self.display_letter(entry)
+
+        self.fluctuation_timer.start(
             FLUCTUATION_INTERVAL
         )
 
@@ -412,27 +516,114 @@ class Camera(QWidget):
         )
 
     # =====================================================
-    # FLUCTUATING PERCENTAGE
+    # ADVANCE BETWEEN LETTERS AND PHASES
     # =====================================================
 
-    def update_percentage(self):
+    def advance_sequence(self):
 
-        if self.prediction is None:
+        # =================================================
+        # AFTER FLUCTUATION:
+        # SHOW THE CORRECT LETTER FOR 3 SECONDS
+        # =================================================
+
+        if self.phase == "fluctuating":
+
+            self.phase = "stable"
+
+            # Correct letter is now locked
+            self.display_letter(
+                self.target_letter
+            )
+
+            # Percentage can still fluctuate,
+            # but the LETTER cannot change.
+            self.fluctuation_timer.start(
+                FLUCTUATION_INTERVAL
+            )
+
+            self.sequence_timer.start(
+                STABLE_DURATION
+            )
+
             return
 
-        self.confidence = random.randint(
-            MIN_PERCENTAGE,
-            MAX_PERCENTAGE
-        )
+        # =================================================
+        # AFTER STABLE / NORMAL / NOTHING:
+        # MOVE TO NEXT ENTRY
+        # =================================================
 
-        self.prediction_label.setText(
-            f"Prediction: {self.current_letter} "
-            f"({self.confidence}%)"
-        )
+        self.fluctuation_timer.stop()
+        self.next_letter()
 
     # =====================================================
-    # CAMERA DISPLAY ONLY
-    # CNN PREDICTIONS DISABLED
+    # UPDATE PREDICTION
+    # =====================================================
+
+    def update_prediction(self):
+
+        if self.target_letter is None:
+            return
+
+        # =================================================
+        # FLUCTUATION PHASE
+        # =================================================
+
+        if self.phase == "fluctuating":
+
+            # J starts as I, then becomes J
+            if self.target_letter in INITIAL_WRONG_GUESSES:
+
+                wrong_guess = INITIAL_WRONG_GUESSES[
+                    self.target_letter
+                ]
+
+                # During the initial 2 seconds,
+                # J is shown as I.
+                self.display_letter(wrong_guess)
+
+                return
+
+            # Alternate between similar letters
+            if self.target_letter in CONFUSION_PAIRS:
+
+                wrong_guess = CONFUSION_PAIRS[
+                    self.target_letter
+                ]
+
+                if self.show_wrong_next:
+
+                    displayed_letter = wrong_guess
+
+                else:
+
+                    displayed_letter = self.target_letter
+
+                # Switch the next displayed letter
+                self.show_wrong_next = (
+                    not self.show_wrong_next
+                )
+
+                self.display_letter(
+                    displayed_letter
+                )
+
+                return
+
+        # =================================================
+        # STABLE / NORMAL PHASE
+        # =================================================
+
+        if self.phase in ("stable", "normal"):
+
+            # Correct letter stays consistent.
+            # Only the percentage fluctuates.
+            self.display_letter(
+                self.target_letter
+            )
+
+    # =====================================================
+    # CAMERA DISPLAY
+    # CNN MODEL IS NOT USED IN THIS TEMPLATE
     # =====================================================
 
     def update_frame(self):
@@ -445,9 +636,14 @@ class Camera(QWidget):
         if not ret:
             return
 
+        # Mirror camera
         frame = cv2.flip(frame, 1)
 
         frame_height, frame_width = frame.shape[:2]
+
+        # =================================================
+        # REGION OF INTEREST
+        # =================================================
 
         roi_width = int(
             frame_width * ROI_WIDTH_RATIO
@@ -470,6 +666,10 @@ class Camera(QWidget):
             (172, 141, 77),
             2
         )
+
+        # =================================================
+        # CONVERT FRAME FOR PYQT
+        # =================================================
 
         rgb_frame = cv2.cvtColor(
             frame,
@@ -505,12 +705,15 @@ class Camera(QWidget):
         )
 
     # =====================================================
-    # ADD CURRENT ENTRY
+    # ADD CURRENT DISPLAYED LETTER
     # =====================================================
 
     def add_letter(self):
 
-        if self.current_letter == "SPACE":
+        if (
+            self.current_entry == "SPACE"
+            and self.phase == "nothing"
+        ):
             self.add_space()
             return
 
@@ -565,7 +768,7 @@ class Camera(QWidget):
     def closeEvent(self, event):
 
         self.sequence_timer.stop()
-        self.percentage_timer.stop()
+        self.fluctuation_timer.stop()
 
         if self.camera_timer is not None:
             self.camera_timer.stop()
